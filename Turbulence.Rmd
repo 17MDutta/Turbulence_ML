@@ -1,0 +1,144 @@
+---
+title: "Turbulence"
+author: "Mihir Dutta"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(randomForest)
+library(tidyverse)
+library(knitr)
+library(broom)
+library(boot)
+library(plyr)
+```
+
+### Random Forests
+
+```{r}
+set.seed(2345)
+
+train <- read.csv("data_train.csv")
+
+original_test <- read.csv("data-test.csv")
+original_test <- original_test %>%
+  mutate(Fr = inv.logit(Fr))
+
+model_train_index <- sample(1:nrow(train), nrow(train)*0.8)
+
+train <- train[model_train_index,]
+test <- train[-model_train_index,]
+
+train <- train %>%
+  mutate(Fr = inv.logit(Fr))
+
+data <- train
+
+test <- test %>%
+  mutate(Fr = inv.logit(Fr))
+```
+
+## Model Tuning
+
+```{r}
+tuning1 <- tuneRF(train[,1:3], train$R_moment_1)
+tuning2 <- tuneRF(train[,1:3], train$R_moment_2)
+tuning3 <- tuneRF(train[,1:3], train$R_moment_3)
+tuning4 <- tuneRF(train[,1:3], train$R_moment_4)
+```
+
+We will select a `mtry` value of 3 for the following models because it has the lowest out-of-box MSE across all moments. 
+
+## R1 Model
+```{r r1}
+R1_model <- randomForest(log(R_moment_1) ~ St + Re + Fr, data=train, mtry=3, importance=TRUE, na.action=na.omit)
+
+importance(R1_model, type = 1)
+```
+
+## R2 Model
+```{r r2}
+R2_model <- randomForest(log(R_moment_2) ~ St + Re + Fr, data=train, mtry=3, importance=TRUE, na.action=na.omit)
+
+importance(R2_model, type = 1)
+```
+
+## R3 Model
+```{r r3}
+R3_model <- randomForest(log(R_moment_3) ~ St + Re + Fr, data=train, mtry=3, importance=TRUE, na.action=na.omit)
+
+importance(R3_model, type = 1)
+```
+
+## R4 Model
+```{r r4}
+R4_model <- randomForest(log(R_moment_4) ~ St + Re + Fr, data=train, mtry=3, importance=TRUE, na.action=na.omit)
+
+importance(R4_model, type = 1)
+```
+
+## Prediction using Test Data
+
+```{r}
+pr1 <- predict(R1_model, test)
+pr2 <- predict(R2_model, test)
+pr3 <- predict(R3_model, test)
+pr4 <- predict(R4_model, test)
+
+
+real_p1 <- predict(R1_model, original_test)
+real_p2 <- predict(R2_model, original_test)
+real_p3 <- predict(R3_model, original_test)
+real_p4 <- predict(R4_model, original_test)
+
+pred_val <- original_test %>%
+  mutate(R1_pred = real_p1) %>%
+  mutate(R2_pred = real_p2) %>%
+  mutate(R3_pred = real_p3) %>%
+  mutate(R4_pred = real_p4)
+
+```
+
+
+## Random Forest Analysis
+
+In order to determine which variables are the most important we decided to analyze feature importance within our random forest. The feature importance analyzes out-of-box MSE to determine how important each of our predictor variables are in the predictions by the random forest. What we find is that for predicting the first moment Re is much more important than the rest of the variables. Re also seems to be a very important predictor as it has a IncMSE% of 93.9%. For predicting the second moment it seems that Re and Fr are more important than St and Re and Fr seem to be nearly equally important. For predicting the third moment Re and Fr also seem to be the important prediction while St is not as important. For the fourth moment it seems that Re and Fr are near-equally important(Re-48.1% and Fr-48.5%) while St is not as important.
+
+This suggests that the Reynolds number is the main predictor for the first moment which suggests it is highly related to the turbulence of the fluid. For the other three moments the IncMSE% drops to around 40%-50% for the important predictors and Reynolds number and Froude constant seem to be the important predictors for the second, third, and fourth moments. This suggests that it is harder to predict the second, third, and fourth moments compared to the first moment. Since the Reynolds number and the Froude constant are the important predictors for the second, third, and fourth moments, this suggests that these moments depend on the "turbulence" and "gravity" of the fluid.
+
+## GAM
+
+```{r}
+library(gam)
+data$Fr <- 1/(1+exp(-data$Fr))
+data$St <- 1/(1+exp(-data$St))
+data$Re <- as.double(data$Re)
+data$Re <- 1/data$Re
+
+gam.1 <- lm(R_moment_1 ~ St + poly(Re, df=2) + poly(Fr, df = 2) + Re:Fr + St:Re, data = data)
+gam.2 <- lm(R_moment_2 ~ St + Re + poly(Fr, df = 2) + Re:Fr + St:Re, data = data)
+gam.3 <- lm(R_moment_3 ~ St + Re + poly(Fr, df = 2) + Re:Fr + St:Re + St:Fr, data = data)
+gam.4 <- lm(R_moment_4 ~ St + Re + poly(Fr, df = 2) + Re:Fr + St:Re + St:Fr, data = data)
+
+
+pred_gam_1 <- predict(gam.1, test)
+pred_gam_2 <- predict(gam.2, test)
+pred_gam_3 <- predict(gam.3, test)
+pred_gam_4 <- predict(gam.4, test)
+```
+
+## Model Analysis
+
+```{r}
+gam_mse1 <- mean((pred_gam_1 - test$R_moment_1)^2)
+gam_mse2 <- mean((pred_gam_2 - test$R_moment_2)^2)
+gam_mse3 <- mean((pred_gam_3 - test$R_moment_3)^2)
+gam_mse4 <- mean((pred_gam_4 - test$R_moment_4)^2)
+
+rf_mse1 <- mean((pr1 - test$R_moment_1)^2)
+rf_mse2 <- mean((pr2 - test$R_moment_2)^2)
+rf_mse3 <- mean((pr3 - test$R_moment_3)^2)
+rf_mse4 <- mean((pr4 - test$R_moment_4)^2)
+```
+
+
